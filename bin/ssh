@@ -1,0 +1,8 @@
+#!/bin/bash
+if ! test -f "$1/ssh_config"; then
+    echo "File $1/ssh_config does not exist"
+    exit 1
+fi
+
+set -x
+exec ssh -F "$1/ssh_config" "${@:2}"

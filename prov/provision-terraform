@@ -1,0 +1,24 @@
+#!/bin/python3
+import sys
+import yaml
+import terraform
+
+def unify_dicts(list_of_dicts):
+    return {k:v for x in list_of_dicts for k,v in x.items()}
+
+def load_yaml(path):
+    with open(path) as f:
+        return yaml.load(f, Loader=yaml.FullLoader)
+
+def load_yamls(paths):
+    return unify_dicts(load_yaml(p) for p in paths)
+
+if len(sys.argv) < 4:
+	raise Exception("provision-terraform DEPLOYMENT_NAME TERRAFORM_PLAN CONFIG_YAMLS...")
+
+deployment_name = sys.argv[1]
+terraform_plan = sys.argv[2]
+config_files = sys.argv[3:]
+config = load_yamls(config_files)
+
+terraform.apply(deployment_name, terraform_plan, config)

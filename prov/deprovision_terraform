@@ -1,0 +1,12 @@
+#!/bin/python3
+import sys
+import yaml
+import terraform
+
+if len(sys.argv) != 2:
+	raise Exception("provision-terraform DEPLOYMENT_NAME")
+
+profile_name = sys.argv[1]
+
+terraform.destroy(profile_name)
+

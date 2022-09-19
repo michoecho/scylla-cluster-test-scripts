@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -e
+
+if ! [ -f key ] && ! [ -f key.pub ]; then
+   ssh-keygen -P "" -m PEM -f key -t ed25519
+   chmod 400 ./key ./key.pub
+   echo "Generated ./key and ./key.pub"
+else
+   echo "./key or ./key.pub already found; aborting"
+fi

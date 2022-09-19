@@ -1,0 +1,19 @@
+region: "us-east-2"
+availability_zone: "us-east-2a"
+
+#server_instance_type: "c5.xlarge"
+server_instance_type: "i3.large"
+server_count: 2
+server_ami: "ami-05a77cdebf3c41074" # Scylla 5.0.2
+server_user: "scyllaadm"
+
+#monitor_instance_type: "c5.xlarge"
+monitor_instance_type: "c5.large"
+monitor_ami: "ami-097a2df4ac947655f" # Ubuntu 22.04
+monitor_user: "ubuntu"
+
+#client_instance_type: "c5.xlarge"
+client_instance_type: "c5.large"
+client_count: 1
+client_ami: "ami-0bc3f1db94ddc86ac" # SCT loader AMI v18
+client_user: "centos"

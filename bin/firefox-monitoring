@@ -1,0 +1,7 @@
+#!/bin/bash
+if ! test -f "$1/ssh_config"; then
+    echo "File $1/ssh_config does not exist"
+    exit 1
+fi
+base="$(bin/ansible-inventory $1 --host monitoring-0 | jq -r .public_ip):3000"
+firefox --new-tab $base/d/advanced-4-5 --new-tab $base/d/detailed-4-5 --new-tab $base/d/OS-4-5
