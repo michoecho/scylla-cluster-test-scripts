@@ -1,0 +1,11 @@
+{% for group in instances %}
+[{{group}}]
+{% for instance in instances[group] %}
+{#
+{{group}}-{{loop.index0}} public_ip={{instance.public_ip}} private_ip={{instance.private_ip}} cpuset="{{var["server_cpuset"]}}" irq_mask="\"{{var["server_irq_mask"]}}\"" num_cpus={{var["server_num_cpus"]}}
+#}
+{{group}}-{{loop.index0}} public_ip={{instance.public_ip}} private_ip={{instance.private_ip}}
+{% endfor %}
+{% endfor %}
+[server:vars]
+seed="{{seed}}"

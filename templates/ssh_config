@@ -1,0 +1,20 @@
+Host *
+    ServerAliveInterval 120
+    StrictHostKeyChecking no
+    IdentityFile {{var['private_key_path']}}
+    ForwardAgent yes
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlMaster auto
+    ControlPersist 60m
+    ConnectionAttempts 60
+    Compression yes
+    LogLevel ERROR
+{% for group in instances %}
+{% set user = var["{}_user".format(group)] %}
+Host {{group}}-*
+    User {{user}}
+{% for instance in instances[group] %}
+Host {{group}}-{{loop.index0}}
+    HostName {{instance["public_ip"]}}
+{% endfor %}
+{% endfor %}
