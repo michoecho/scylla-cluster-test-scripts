@@ -1,6 +1,6 @@
 #!/bin/bash
 if ! test -f "$1/ssh_config"; then
-    echo "File $1/ssh_config does not exist"
+    echo "File $1/ssh_config does not exist" >2
     exit 1
 fi
 

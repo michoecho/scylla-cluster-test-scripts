@@ -4,6 +4,7 @@ import os
 from typing import List, Dict, Sequence
 import yaml
 import json
+import subprocess
 
 def load_yaml(stream):
     return yaml.load(stream, Loader=yaml.SafeLoader)
@@ -11,7 +12,6 @@ def dump_yaml(stream):
     return yaml.dump(stream, Dumper=yaml.SafeDumper)
 
 def load_inventory(deployment_name):
-    import subprocess
     inventory_yaml = subprocess.run(['bin/ansible-inventory', deployment_name, '--list', '--yaml'], check=True, capture_output=True).stdout
     return load_yaml(inventory_yaml)["all"]["children"]
 
@@ -65,7 +65,7 @@ class Deployment:
         cmd = 'until test -e /etc/scylla/machine_image_configured; do sleep 1; done'
         await self.pssh(self.server_hosts, cmd)
 
-    async def configure_scylla_yaml(self):
+    async def configure_scylla_yaml(self, extra_opts={}):
         yamls_raw = await asyncio.gather(*[self.ssh_output(k, "cat /etc/scylla/scylla.yaml") for k in self.server_hosts])
         yamls = list(zip(self.server_hosts.items(), (load_yaml(x) for x in yamls_raw)))
         for (k, v), y in yamls:
@@ -76,13 +76,14 @@ class Deployment:
                 y["skip_wait_for_gossip_to_settle"] = 0
             else: 
                 y["ring_delay_ms"] = 10000
+            y.update(extra_opts)
         await asyncio.gather(*[self.ssh(k, "sudo tee /etc/scylla/scylla.yaml >/dev/null", stdin_data=dump_yaml(y).encode("utf-8")) for (k, v), y in yamls])
 
     async def setup_monitor(self):
         aptget = "apt-get -oDPkg::Lock::Timeout=-1"
         command = f"""sudo bash <<EOF
                {aptget} update
-               {aptget} install -y docker docker.io software-properties-common python3 python3-dev python-setuptools unzip wget python3-pip
+               {aptget} install -y docker docker.io software-properties-common python3 python3-dev python-setuptools unzip wget python3-pip fish
                python3 -m pip install pyyaml
                python3 -m pip install -I -U psutil
                systemctl start docker 
@@ -101,6 +102,32 @@ class Deployment:
         }]
         await self.ssh(self.monitor_host, "tee scylla-monitoring/prometheus/scylla_servers.yml >/dev/null", stdin_data=dump_yaml(config).encode("utf-8"))
         await self.ssh(self.monitor_host, "cd scylla-monitoring; ./start-all.sh -d ../data -v 5.0 -b -web.enable-admin-api")
+
+    async def setup_clients(self):
+        aptget = "apt-get -oDPkg::Lock::Timeout=-1"
+        command_1 = f"""sudo bash -xeu <<EOF
+               {aptget} update
+               {aptget} install -y openjdk-11-jre openjdk-8-jre fish
+        \nEOF"""
+        command_2 = f"""sudo bash -xeu <<EOF
+               wget https://s3.amazonaws.com/downloads.scylladb.com/downloads/scylla/relocatable/scylladb-5.1/scylla-tools-package-5.1.1.0.20221208.1cfedc5b59f4.tar.gz
+               tar xf scylla-tools*.tar.gz
+               pushd scylla-tools
+               sudo ./install.sh
+               popd
+        \nEOF"""
+        await asyncio.gather(
+            self.pssh(self.client_hosts, command_1),
+            self.pssh(self.client_hosts, command_2),
+        )
+
+    async def setup_servers(self):
+        aptget = "apt-get -oDPkg::Lock::Timeout=-1"
+        command = f"""sudo bash -xeu <<EOF
+               {aptget} update
+               {aptget} install -y linux-tools-common linux-tools-$(uname -r) blktrace fio fish
+        \nEOF"""
+        await self.pssh(self.server_hosts, command)
 
     async def rsync(self, src, dest, *options):
         await run(["rsync", *options, "-r", "-e", f"bin/ssh {self.name}", src, dest])

@@ -2,8 +2,8 @@ region: "us-east-2"
 availability_zone: "us-east-2a"
 
 #server_instance_type: "c5.xlarge"
-server_instance_type: "i3.large"
-server_count: 2
+server_instance_type: "i4i.2xlarge"
+server_count: 1
 server_ami: "ami-05a77cdebf3c41074" # Scylla 5.0.2
 server_user: "scyllaadm"
 
