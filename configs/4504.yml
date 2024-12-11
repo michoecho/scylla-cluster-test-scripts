@@ -1,0 +1,16 @@
+region: "us-east-1"
+availability_zone: "us-east-1c"
+
+server_instance_type: "i4i.2xlarge"
+server_count: 6
+server_ami: "ami-0466aab88c848c3cd"
+server_user: "scyllaadm"
+
+monitor_instance_type: "c6i.xlarge"
+monitor_ami: "ami-00f3c44a2de45a590" # Ubuntu 24.04
+monitor_user: "ubuntu"
+
+client_instance_type: "c6i.2xlarge"
+client_count: 4
+client_ami: "ami-00f3c44a2de45a590" # Ubuntu 24.04
+client_user: "ubuntu"

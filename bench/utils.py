@@ -76,14 +76,17 @@ class Deployment:
                 y["skip_wait_for_gossip_to_settle"] = 0
             else: 
                 y["ring_delay_ms"] = 10000
+            y["enable_tablets"] = "true"
+            y["stream_io_throughput_mb_per_sec"] = 1000
             y.update(extra_opts)
         await asyncio.gather(*[self.ssh(k, "sudo tee /etc/scylla/scylla.yaml >/dev/null", stdin_data=dump_yaml(y).encode("utf-8")) for (k, v), y in yamls])
+        await self.pssh(self.server_hosts, "sudo pkill -SIGHUP scylla")
 
     async def setup_monitor(self):
         aptget = "apt-get -oDPkg::Lock::Timeout=-1"
         command = f"""sudo bash <<EOF
                {aptget} update
-               {aptget} install -y docker docker.io software-properties-common python3 python3-dev python-setuptools unzip wget python3-pip fish
+               {aptget} install -y docker.io python3 python3-dev unzip wget python3-pip fish
                python3 -m pip install pyyaml
                python3 -m pip install -I -U psutil
                systemctl start docker 
@@ -93,7 +96,7 @@ class Deployment:
         await self.ssh_relogin(self.monitor_host)
         command = """bash <<EOF
             git -C scylla-monitoring fetch -q origin || git clone -q https://github.com/scylladb/scylla-monitoring
-            git -C scylla-monitoring checkout -q scylla-monitoring-4.0.1
+            git -C scylla-monitoring checkout -q scylla-monitoring-4.6.2
         \nEOF"""
         await self.ssh(self.monitor_host, command)
         config = [{
@@ -101,31 +104,25 @@ class Deployment:
             "labels": {"cluster": "cluster1", "dc": "dc1"},
         }]
         await self.ssh(self.monitor_host, "tee scylla-monitoring/prometheus/scylla_servers.yml >/dev/null", stdin_data=dump_yaml(config).encode("utf-8"))
-        await self.ssh(self.monitor_host, "cd scylla-monitoring; ./start-all.sh -d ../data -v 5.0 -b -web.enable-admin-api")
+        await self.ssh(self.monitor_host, "cd scylla-monitoring; ./start-all.sh -d ../data -v 2024.2 -b --web.enable-admin-api")
 
     async def setup_clients(self):
         aptget = "apt-get -oDPkg::Lock::Timeout=-1"
-        command_1 = f"""sudo bash -xeu <<EOF
+        command = f"""sudo bash -xeu <<EOF
                {aptget} update
-               {aptget} install -y openjdk-11-jre openjdk-8-jre fish
-        \nEOF"""
-        command_2 = f"""sudo bash -xeu <<EOF
-               wget https://s3.amazonaws.com/downloads.scylladb.com/downloads/scylla/relocatable/scylladb-5.1/scylla-tools-package-5.1.1.0.20221208.1cfedc5b59f4.tar.gz
-               tar xf scylla-tools*.tar.gz
-               pushd scylla-tools
-               sudo ./install.sh
-               popd
+               {aptget} install -y openjdk-11-jre fish
+               wget https://github.com/scylladb/cassandra-stress/releases/download/v3.17.0/cassandra-stress-3.17.0-bin.tar.gz
+               tar xf cassandra-stress*.tar.gz
         \nEOF"""
         await asyncio.gather(
-            self.pssh(self.client_hosts, command_1),
-            self.pssh(self.client_hosts, command_2),
+            self.pssh(self.client_hosts, command),
         )
 
     async def setup_servers(self):
         aptget = "apt-get -oDPkg::Lock::Timeout=-1"
         command = f"""sudo bash -xeu <<EOF
                {aptget} update
-               {aptget} install -y linux-tools-common linux-tools-$(uname -r) blktrace fio fish
+               {aptget} install -y linux-tools-common linux-tools-$(uname -r) blktrace fio fish rsync
         \nEOF"""
         await self.pssh(self.server_hosts, command)
 
@@ -136,6 +133,10 @@ class Deployment:
         await run(["mkdir", "-p", dest_dir])
         await asyncio.gather(*[self.rsync(f"{host}:{src}", f"{dest_dir}/{host}/", "--mkpath") for host in hosts])
 
+    async def stop_cs(self, /, client_hosts: Sequence[str] = None):
+        client_hosts = client_hosts or self.client_hosts
+        await self.pssh(client_hosts, "pkill --full org.apache.cassandra.stress")
+
     async def cs(self, /, options, server_hosts: Sequence[str] = None, client_hosts: Sequence[str] = None, cs = "cassandra-stress"):
         server_hosts = server_hosts or self.server_hosts
         client_hosts = client_hosts or self.client_hosts
@@ -145,7 +146,7 @@ class Deployment:
         command = f"{cs} {options} {node} {mode}"
         await self.pssh(client_hosts, command)
 
-    async def populate(self, /, n_rows, options, server_hosts: Sequence[str] = None, client_hosts: Sequence[str] = None, cs = "cassandra-stress"):
+    async def populate(self, /, n_rows, options, server_hosts: Sequence[str] = None, client_hosts: Sequence[str] = None, cs = "cassandra-stress", tablets: bool = False):
         server_hosts = server_hosts or self.server_hosts
         client_hosts = client_hosts or self.client_hosts
         await self.pssh(client_hosts, f"pkill --full org.apache.cassandra.stress")
@@ -159,6 +160,9 @@ class Deployment:
 
         (server_0_name, server_0_vars) = next(iter(self.server_hosts.items()))
         
+        if tablets:
+            await self.ssh(server_0_name, f'''cqlsh -e "CREATE KEYSPACE keyspace1 WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND TABLETS = {{'enabled': true}};" {server_0_vars["private_ip"]}''')
+
         # Create schema.
         await self.ssh(next(iter(self.client_hosts)), f'{cs} write no-warmup cl=ALL n=1 -pop seq=1..1 {node} {mode} {options} >/dev/null')
         await self.ssh(server_0_name, f'cqlsh -e "ALTER KEYSPACE keyspace1 WITH DURABLE_WRITES = false;" {server_0_vars["private_ip"]}')
@@ -168,9 +172,10 @@ class Deployment:
         ])
         await self.ssh(server_0_name, f'cqlsh -e "ALTER KEYSPACE keyspace1 WITH DURABLE_WRITES = true;" {server_0_vars["private_ip"]}')
 
-    async def start_cluster(self):
-        seed = next(k for (k, v) in self.server_hosts.items() if v["private_ip"] == v["seed"])
-        non_seeds = [x for x in self.server_hosts if x != seed]
+    async def start_cluster(self, server_hosts: Sequence[str] = None):
+        server_hosts = {x: self.server_hosts[x] for x in (server_hosts or self.server_hosts)}
+        seed = next(k for (k, v) in server_hosts.items() if v["private_ip"] == v["seed"])
+        non_seeds = [x for x in server_hosts if x != seed]
         await self.ssh(seed, 'sudo systemctl start scylla-server')
         await self.wait_for_cql(seed)
         # Does it really have to be sequential?
@@ -178,8 +183,24 @@ class Deployment:
             await self.ssh(x, 'sudo systemctl start scylla-server')
             await self.wait_for_cql(x)
 
+    async def start_nodes_in_parallel(self, server_hosts: Sequence[str] = None):
+        server_hosts = {x: self.server_hosts[x] for x in (server_hosts or self.server_hosts)}
+        await self.pssh(server_hosts, 'sudo systemctl start scylla-server')
+        for x in server_hosts:
+            await self.wait_for_cql(x)
+
     async def stop_cluster(self):
         await self.pssh(self.server_hosts, 'sudo systemctl stop scylla-server')
+
+    async def reset_cluster(self):
+        await self.pssh(self.server_hosts, """
+            sudo bash <<EOF
+            shopt -s extglob
+            systemctl stop scylla-server
+            rm -rf /var/lib/scylla/!(backup)
+            sudo mkdir /var/lib/scylla/{data,hints,view_hints,commitlog}
+            sudo chown scylla /var/lib/scylla/{data,hints,view_hints,commitlog}
+            \nEOF""")
 
     async def download_metrics(self, dest_dir):
         response = await self.ssh_output(self.monitor_host, "curl --silent -XPOST http://localhost:9090/api/v1/admin/tsdb/snapshot")
@@ -196,7 +217,7 @@ class Deployment:
         return json.loads(response.decode("utf-8"))
 
     async def wait_for_compaction_end(self):
-        query_string='sum(scylla_compaction_manager_compactions\{\})'
+        query_string=r'sum(scylla_compaction_manager_compactions{})'
         poll_period=20
         print(f'Waiting for all compactions to end. Checking every {poll_period}s:')
         while True:

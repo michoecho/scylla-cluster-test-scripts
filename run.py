@@ -10,52 +10,41 @@ dname = sys.argv[1]
 assert shlex.quote(dname)
 d = bench.utils.Deployment(dname)
 schema="-schema replication(strategy=SimpleStrategy,replication_factor=3) -col size='FIXED(1024)' n='FIXED(1)'",
-
-async def setup_cluster():
-    await d.wait_for_machine_image()
-    await d.configure_scylla_yaml()
-    await d.start_cluster()
-    await d.populate(
-        cs="JAVA_HOME=/usr/lib/jvm/java-1.8.0 cassandra-stress",
-        n_rows=1000000000,
-        options="-rate threads=200 -schema 'replication(strategy=SimpleStrategy,replication_factor=3)' -col 'size=FIXED(1024)' 'n=FIXED(1)'",
-    )
-    await d.quiesce()
-    await d.stop_cluster()
-    await d.backup_data()
-
-async def prepare():
-    await asyncio.gather(setup_cluster(), d.setup_monitor())
-
-async def run():
-    datetime_now_string = datetime.now().replace(microsecond=0).isoformat().replace(":", "-")
-    trial_dir = "trials/{}/{}".format(dname, datetime_now_string)
-
-    async def get_metrics():
-        await d.stop_cluster()
-        metrics_dir = os.path.join(trial_dir, "monitoring")
-        await d.download_metrics(metrics_dir)
-
-    async def get_summary(sub):
-        warmup_seconds = 60
-        cooldown_seconds = 10
-        stat_dir = os.path.join(trial_dir, f"cassandra-stress: {sub}")
-        await d.collect(d.client_hosts, "log.hdr", stat_dir)
-        return await bench.hdr.process_hdr_file_set(stat_dir, "log", java="/usr/lib/jvm/java-1.8.0/bin/java", time_start=warmup_seconds, time_end=duration-cooldown_seconds)
-
-    duration = 60 * 60
-    for throttle, op in [(15000, "write"), (10000, "read"), (9000, "mixed 'ratio(write=1,read=1)'")]:
-        await d.cs(
-            cs="JAVA_HOME=/usr/lib/jvm/java-1.8.0 cassandra-stress",
-            options = f"{op} duration='{duration}s' cl=QUORUM -rate threads=100 throttle={throttle}/s -log hdrfile=log.hdr -pop 'dist=gauss(1..1000000000,500000000,50000000)' -schema 'replication(strategy=SimpleStrategy,replication_factor=3)' -col 'size=FIXED(1024)' 'n=FIXED(1)'",
-        )
-        await get_summary(op)
-    await get_metrics()
+CS="JAVA=$(realpath /usr/lib/jvm/java-11*/bin/java) CLASSPATH=$(echo `ls -1 cas*/lib/*.jar cas*/tools/lib/*.jar` | tr ' ' ':') cas*/tools/bin/cassandra-stress"
 
 async def full():
-    await prepare()
-    await d.stop_cluster()
-    await asyncio.gather(d.clean_metrics(), d.restore_data())
-    await d.start_cluster()
-    await run()
+    #await d.stop_cs()
+    #await d.stop_cluster()
+    #await d.configure_scylla_yaml()
+    #await d.setup_monitor()
+    #await d.reset_cluster()
+    #await d.start_cluster(list(d.server_hosts)[:3])
+    #await d.populate(
+    #    cs="JAVA=$(realpath /usr/lib/jvm/java-11*/bin/java) CLASSPATH=$(echo `ls -1 cas*/lib/*.jar cas*/tools/lib/*.jar` | tr ' ' ':') cas*/tools/bin/cassandra-stress",
+    #    n_rows=650000000,
+    #    options="-rate threads=300 -schema 'replication(strategy=SimpleStrategy,replication_factor=3)' -col 'size=FIXED(128)' 'n=FIXED(8)'",
+    #    tablets=True,
+    #)
+    #await d.backup_data()
+    #await asyncio.gather(*[
+    #    d.ssh(d.monitor_host, "cd scylla-monitoring; ./kill-all.sh")
+    #    d.wait_for_machine_image()
+    #])
+    #await asyncio.gather(*[
+    #    d.setup_monitor(),
+    #    d.setup_clients(),
+    #    d.setup_servers(),
+    #])
+    #await d.configure_scylla_yaml()
+    #await asyncio.gather(*[d.rsync("fake_io_properties.yaml", f"{s}:/etc/scylla.d/io_properties.yaml", "--rsync-path=sudo rsync") for s in d.server_hosts])
+    #await asyncio.gather(*[d.rsync("fake_io.conf", f"{s}:/etc/scylla.d/io.conf", "--rsync-path=sudo rsync") for s in d.server_hosts])
+    #await asyncio.gather(*[d.rsync("fake_cpuset.conf", f"{s}:/etc/scylla.d/cpuset.conf", "--rsync-path=sudo rsync") for s in d.server_hosts])
+    await d.stop_cs()
+    await d.restore_data()
+    await d.start_nodes_in_parallel(list(d.server_hosts)[:3])
+    await d.cs(
+        cs=CS,
+        options = f"read no-warmup cl=QUORUM duration=800m -rate threads=300 fixed=24000/s -col 'size=FIXED(128) n=FIXED(8)' -pop 'dist=gauss(1..650000000,325000000,9750000)'",
+    )
+
 asyncio.run(full())
