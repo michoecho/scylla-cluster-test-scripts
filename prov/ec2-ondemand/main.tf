@@ -10,6 +10,7 @@ variable "server_instance_type" {}
 variable "server_ami" {}
 variable "monitor_instance_type" {}
 variable "monitor_ami" {}
+variable "monitor_state" { default = "running" }
 variable "client_instance_type" {}
 variable "client_count" { type = number }
 variable "client_ami" {}
@@ -158,6 +159,14 @@ resource "aws_security_group" "server" {
     description = "Thrift"
     from_port   = 9160
     to_port     = 9160
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "Extra"
+    from_port   = 8000
+    to_port     = 8000
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -340,6 +349,7 @@ resource "aws_instance" "monitor" {
   instance_type     = var.monitor_instance_type
   availability_zone = var.availability_zone
   subnet_id         = aws_subnet.main.id
+  associate_public_ip_address = true
   count             = 1
 
   tags = {
@@ -362,6 +372,11 @@ resource "aws_instance" "monitor" {
     volume_type = "gp3"
     volume_size = 384
   }
+}
+
+resource "aws_ec2_instance_state" "monitor" {
+  instance_id = aws_instance.monitor[0].id
+  state       = var.monitor_state
 }
 
 # ========== clients ==========================
